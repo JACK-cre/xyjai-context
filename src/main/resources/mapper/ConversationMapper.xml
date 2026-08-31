@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="org.example.xyjaicontext.mapper.ConversationMapper">
+    <resultMap id="ConversationRecordResult" type="org.example.xyjaicontext.model.ConversationRecord">
+        <id property="id" column="id"/>
+        <result property="conversationId" column="conversation_id"/>
+        <result property="username" column="username"/>
+        <result property="messages" column="messages"/>
+        <result property="createTime" column="create_time"/>
+        <result property="updateTime" column="update_time"/>
+    </resultMap>
+
+    <insert id="insert" parameterType="org.example.xyjaicontext.model.ConversationRecord">
+        INSERT INTO conversation_record (conversation_id, username, messages, create_time, update_time)
+        VALUES (#{conversationId}, #{username}, #{messages}, NOW(), NOW())
+    </insert>
+
+    <update id="update" parameterType="org.example.xyjaicontext.model.ConversationRecord">
+        UPDATE conversation_record
+        SET messages = #{messages}, username = #{username}, update_time = NOW()
+        WHERE conversation_id = #{conversationId}
+    </update>
+
+    <select id="selectByConversationId" parameterType="map" resultMap="ConversationRecordResult">
+        SELECT * FROM conversation_record
+        WHERE conversation_id = #{conversationId}
+        <if test="username != null">
+            AND username = #{username}
+        </if>
+    </select>
+
+    <select id="selectByUsername" parameterType="String" resultMap="ConversationRecordResult">
+        SELECT * FROM conversation_record
+        WHERE username = #{username}
+        ORDER BY update_time DESC
+    </select>
+
+    <delete id="deleteByConversationId" parameterType="String">
+        DELETE FROM conversation_record
+        WHERE conversation_id = #{conversationId}
+    </delete>
+</mapper>
