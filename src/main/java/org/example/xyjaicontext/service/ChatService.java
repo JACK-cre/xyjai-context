@@ -9,7 +9,9 @@ import org.springframework.ai.chat.client.advisor.MessageChatMemoryAdvisor;
 import org.springframework.ai.document.Document;
 import org.springframework.ai.vectorstore.SearchRequest;
 import org.springframework.ai.vectorstore.VectorStore;
+import org.springframework.ai.vectorstore.filter.FilterExpressionBuilder;
 import org.springframework.stereotype.Service;
+import org.springframework.beans.factory.annotation.Value;
 
 import java.util.List;
 import java.util.stream.Collectors;
@@ -22,12 +24,31 @@ public class ChatService {
     private final VectorStore vectorStore;
     private final RedisChatMemory chatMemory;
     private final ModelService modelService;
+    private final AgentWorkflowService agentWorkflowService;
+
+    @Value("${agent.graph.enabled:true}")
+    private boolean graphEnabled;
 
     /**
      * 统一对话入口
      */
     public String chat(String question, boolean useRag, String conversationId, String username) {
-        return useRag ? chatWithRag(question, conversationId, username) : chatNormal(question, conversationId, username);
+        return chatWithMetadata(question, useRag, conversationId, username).answer();
+    }
+
+    public AgentWorkflowService.ChatResult chatWithMetadata(String question, boolean useRag,
+                                                            String conversationId, String username) {
+        if (graphEnabled) {
+            try {
+                return agentWorkflowService.chatWithResult(question, useRag, conversationId, username);
+            } catch (ModelCallException e) {
+                throw e;
+            } catch (Exception e) {
+                log.error("Agent StateGraph failed, falling back to legacy chat flow", e);
+            }
+        }
+        String answer = useRag ? chatWithRag(question, conversationId, username) : chatNormal(question, conversationId, username);
+        return new AgentWorkflowService.ChatResult(null, answer);
     }
 
     /**
@@ -37,13 +58,17 @@ public class ChatService {
         List<Document> docs = null;
         try {
             // 1. 向量检索
-            docs = vectorStore.similaritySearch(
-                    SearchRequest.builder()
+            SearchRequest.Builder request = SearchRequest.builder()
                             .query(question)
                             .topK(4)
                             .similarityThreshold(0.75)
-                            .build()
-            );
+                            .filterExpression(new FilterExpressionBuilder().eq("username", username).build());
+            docs = vectorStore.similaritySearch(request.build());
+            if (docs != null) {
+                docs = docs.stream()
+                        .filter(doc -> username.equals(String.valueOf(doc.getMetadata().get("username"))))
+                        .toList();
+            }
         } catch (Exception e) {
             // 向量检索异常，记录日志
             log.error("RAG检索失败: {}", e.getMessage());
@@ -70,10 +95,16 @@ public class ChatService {
                 .build();
 
         UserContext.setUsername(username);
-        String answer = client.prompt().user(question).call().content();
-        chatMemory.addConversation(username, conversationId, question.substring(0, Math.min(question.length(), 30)));
-        UserContext.clear();
-        return answer;
+        try {
+            String answer = client.prompt().user(question).call().content();
+            if (answer == null || answer.isBlank()) {
+                throw new ModelCallException("模型返回空响应");
+            }
+            chatMemory.addConversation(username, conversationId, question.substring(0, Math.min(question.length(), 30)));
+            return answer;
+        } finally {
+            UserContext.clear();
+        }
     }
 
     /**
@@ -91,10 +122,16 @@ public class ChatService {
                 .build();
         // 【核心修改点】同样在这里设置 username
         UserContext.setUsername(username);
-        String answer = client.prompt().user(question).call().content();
-        // 关联用户与对话
-        chatMemory.addConversation(username, conversationId, question.substring(0, Math.min(question.length(), 30)));
-        UserContext.clear();
-        return answer;
+        try {
+            String answer = client.prompt().user(question).call().content();
+            if (answer == null || answer.isBlank()) {
+                throw new ModelCallException("模型返回空响应");
+            }
+            // 关联用户与对话
+            chatMemory.addConversation(username, conversationId, question.substring(0, Math.min(question.length(), 30)));
+            return answer;
+        } finally {
+            UserContext.clear();
+        }
     }
 }

@@ -28,8 +28,6 @@ public class CacheConfig {
                 .maximumSize(2000)
                 // 过期时间（写入后10分钟）
                 .expireAfterWrite(10, TimeUnit.MINUTES)
-                // 刷新时间（写入后5分钟）
-                .refreshAfterWrite(5, TimeUnit.MINUTES)
                 // 统计信息
                 .recordStats();
     }

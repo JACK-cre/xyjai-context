@@ -6,6 +6,7 @@ import org.example.xyjaicontext.memory.RedisChatMemory;
 import org.example.xyjaicontext.model.ConversationRecord;
 import org.example.xyjaicontext.service.ChatService;
 import org.example.xyjaicontext.service.DocumentService;
+import org.example.xyjaicontext.service.AgentWorkflowService;
 import org.example.xyjaicontext.util.RedissonRateLimiter;
 import org.springframework.ai.chat.messages.Message;
 import org.springframework.beans.factory.annotation.Value;
@@ -26,6 +27,7 @@ import java.util.UUID;
 public class AiController {
 
     private final ChatService chatService;
+    private final AgentWorkflowService agentWorkflowService;
     private final DocumentService documentService;
     private final RedissonRateLimiter rateLimiter;
     private final RedisChatMemory chatMemory;
@@ -48,9 +50,10 @@ public class AiController {
     }
     // 获取具体对话的历史记录
     @GetMapping("/conversations/{conversationId}")
-    public ResponseEntity<ApiResponse<List<Message>>> getConversationHistory(@PathVariable String conversationId) {
+    public ResponseEntity<ApiResponse<List<Message>>> getConversationHistory(@PathVariable String conversationId,
+                                                                              Authentication authentication) {
         try {
-            List<Message> messages = chatMemory.get(conversationId);
+            List<Message> messages = chatMemory.getForUser(conversationId, authentication.getName());
             return ResponseEntity.ok(ApiResponse.success(messages));
         } catch (Exception e) {
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
@@ -59,9 +62,10 @@ public class AiController {
     }
     // 删除对话
     @DeleteMapping("/conversations/{conversationId}")
-    public ResponseEntity<ApiResponse<Map<String, Object>>> deleteConversation(@PathVariable String conversationId) {
+    public ResponseEntity<ApiResponse<Map<String, Object>>> deleteConversation(@PathVariable String conversationId,
+                                                                                Authentication authentication) {
         try {
-            chatMemory.deleteUserConversation(conversationId);
+            chatMemory.deleteUserConversation(conversationId, authentication.getName());
             return ResponseEntity.ok(ApiResponse.success(Map.of("msg", "对话删除成功")));
         } catch (Exception e) {
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
@@ -75,8 +79,8 @@ public class AiController {
                                                                  @RequestParam(required = false) String conversationId,
                                                                  Authentication authentication) {
         String convId = conversationId != null ? conversationId : UUID.randomUUID().toString();
-        String clientIp = "user:" + convId;
         String username = authentication.getName();
+        String clientIp = "user:" + username;
 
         if (!rateLimiter.isAllowed(clientIp, maxRequests, windowSeconds)) {
             return ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS)
@@ -84,8 +88,15 @@ public class AiController {
         }
 
         try {
-            String answer = chatService.chat(question, useRag, convId, username);
-            return ResponseEntity.ok(ApiResponse.success(Map.of("answer", answer, "conversationId", convId, "username", username)));
+            AgentWorkflowService.ChatResult result = chatService.chatWithMetadata(question, useRag, convId, username);
+            Map<String, Object> response = new java.util.LinkedHashMap<>();
+            response.put("answer", result.answer());
+            response.put("conversationId", convId);
+            response.put("username", username);
+            if (result.runId() != null) {
+                response.put("runId", result.runId());
+            }
+            return ResponseEntity.ok(ApiResponse.success(response));
         } catch (Exception e) {
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
                     .body(ApiResponse.success(Map.of("error", "AI服务异常: " + e.getMessage())));
@@ -99,7 +110,7 @@ public class AiController {
             return ResponseEntity.badRequest().body(ApiResponse.success(Map.of("error", "文件不能为空")));
         }
         try {
-            String taskId = documentService.processDocumentAsync(file);
+            String taskId = documentService.processDocumentAsync(file, authentication.getName());
             return ResponseEntity.ok(ApiResponse.success(Map.of(
                     "msg", "文档已提交解析，后台异步处理中",
                     "taskId", taskId,
@@ -113,8 +124,14 @@ public class AiController {
 
     // 获取文档处理状态
     @GetMapping("/document/status/{taskId}")
-    public ResponseEntity<ApiResponse<Map<String, Object>>> getDocumentStatus(@PathVariable String taskId) {
+    public ResponseEntity<ApiResponse<Map<String, Object>>> getDocumentStatus(@PathVariable String taskId,
+                                                                                Authentication authentication) {
         try {
+            String owner = redisTemplate.opsForValue().get("doc:owner:" + taskId);
+            if (owner == null || !owner.equals(authentication.getName())) {
+                return ResponseEntity.status(HttpStatus.NOT_FOUND)
+                        .body(ApiResponse.success(Map.of("status", "NOT_FOUND")));
+            }
             String statusKey = "doc:status:" + taskId;
             String status = redisTemplate.opsForValue().get(statusKey);
             if (status == null) {
@@ -125,5 +142,32 @@ public class AiController {
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
                     .body(ApiResponse.success(Map.of("error", "获取状态失败: " + e.getMessage())));
         }
+    }
+
+    @GetMapping("/document/result/{taskId}")
+    public ResponseEntity<ApiResponse<Map<String, Object>>> getDocumentResult(@PathVariable String taskId,
+                                                                                Authentication authentication) {
+        try {
+            Map<String, Object> result = documentService.getResult(taskId, authentication.getName());
+            if (result == null) {
+                return ResponseEntity.status(HttpStatus.NOT_FOUND)
+                        .body(ApiResponse.success(Map.of("status", "NOT_FOUND")));
+            }
+            return ResponseEntity.ok(ApiResponse.success(result));
+        } catch (Exception e) {
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(ApiResponse.success(Map.of("error", "获取文档结果失败: " + e.getMessage())));
+        }
+    }
+
+    @GetMapping("/runs/{runId}")
+    public ResponseEntity<ApiResponse<Map<String, Object>>> getAgentRun(@PathVariable String runId,
+                                                                          Authentication authentication) {
+        Map<String, Object> run = agentWorkflowService.getRun(runId, authentication.getName());
+        if (run == null) {
+            return ResponseEntity.status(HttpStatus.NOT_FOUND)
+                    .body(ApiResponse.success(Map.of("status", "NOT_FOUND")));
+        }
+        return ResponseEntity.ok(ApiResponse.success(run));
     }
 }

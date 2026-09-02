@@ -9,19 +9,11 @@ import org.example.xyjaicontext.model.DocRecord;
 import org.springframework.amqp.core.Message;
 import org.springframework.amqp.rabbit.annotation.RabbitListener;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
-import org.springframework.ai.document.Document;
-import org.springframework.ai.reader.tika.TikaDocumentReader;
-import org.springframework.ai.transformer.splitter.TokenTextSplitter;
-import org.springframework.ai.vectorstore.VectorStore;
-import org.springframework.core.io.ByteArrayResource;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-import java.io.File;
 import java.io.IOException;
-import java.nio.file.Files;
-import java.util.List;
 import java.util.concurrent.TimeUnit;
 
 /**
@@ -43,9 +35,6 @@ import java.util.concurrent.TimeUnit;
 @RequiredArgsConstructor
 public class DocumentMessageReceiver {
 
-    /** 向量存储服务，用于存储文档向量 */
-    private final VectorStore vectorStore;
-
     /** 文档记录 Mapper，用于持久化处理状态 */
     private final DocRecordMapper docMapper;
 
@@ -54,6 +43,9 @@ public class DocumentMessageReceiver {
 
     /** RabbitMQ 模板，用于手动发送消息到死信队列 */
     private final RabbitTemplate rabbitTemplate;
+
+    /** LangGraph-style document workflow. */
+    private final DocumentWorkflowService documentWorkflowService;
 
     /** 消费端最大重试次数 */
     private static final int MAX_CONSUME_RETRY = 3;
@@ -98,6 +90,14 @@ public class DocumentMessageReceiver {
             return;
         }
 
+        String processingKey = "doc:processing:" + taskId;
+        Boolean lockAcquired = redisTemplate.opsForValue().setIfAbsent(processingKey, "1", 10, TimeUnit.MINUTES);
+        if (Boolean.FALSE.equals(lockAcquired)) {
+            log.info("文档正在被其他消费者处理，确认重复消息: {}", taskId);
+            channel.basicAck(amqpMessage.getMessageProperties().getDeliveryTag(), false);
+            return;
+        }
+
         // ==================== 步骤2：获取重试次数 ====================
         int retryCount = getRetryCount(retryCountKey);
         log.info("当前重试次数: {}/{}", retryCount, MAX_CONSUME_RETRY);
@@ -110,33 +110,35 @@ public class DocumentMessageReceiver {
         DocRecord record = new DocRecord();
         record.setFileName(message.getFileName());
         record.setStatus(0);
-        docMapper.insert(record);
+        // Rabbit 重试使用同一个 taskId，不重复创建 doc_record。
+        try {
+            if (retryCount == 0) {
+                docMapper.insert(record);
+                redisTemplate.opsForValue().set("doc:record:" + taskId,
+                        String.valueOf(record.getId()), 24, TimeUnit.HOURS);
+            } else {
+                String recordId = redisTemplate.opsForValue().get("doc:record:" + taskId);
+                if (recordId != null) {
+                    record.setId(Long.valueOf(recordId));
+                } else {
+                    // A process restart can lose the short-lived record-id cache.
+                    // Recreate a record instead of issuing an UPDATE with a null id.
+                    docMapper.insert(record);
+                    redisTemplate.opsForValue().set("doc:record:" + taskId,
+                            String.valueOf(record.getId()), 24, TimeUnit.HOURS);
+                }
+            }
+        } catch (RuntimeException e) {
+            redisTemplate.delete(processingKey);
+            throw e;
+        }
 
-        File tempFile = null;
         try {
             log.info("🔄 开始解析文档: {}, 第{}次尝试", message.getFileName(), retryCount + 1);
-
-            // 创建临时文件存储上传的文档内容
-            tempFile = File.createTempFile("upload_", "_" + message.getFileName());
-            Files.write(tempFile.toPath(), message.getFileContent());
-            // ==================== 步骤4：文档解析 ====================
-            TikaDocumentReader reader = new TikaDocumentReader(new ByteArrayResource(message.getFileContent()));
-            List<Document> docs = reader.get();
-
-            // ==================== 步骤5：文本分片 ====================
-            /**
-             * 将长文档分割成多个小块（chunks）
-             * 避免单个文档过大影响向量检索效果
-             */
-            TokenTextSplitter splitter = new TokenTextSplitter();
-            List<Document> chunks = splitter.apply(docs);
-
-            // 为每个分片添加元数据，标记来源文件
-            chunks.forEach(d -> d.getMetadata().put("source", message.getFileName()));
-
-            // ==================== 步骤6：存储到向量数据库 ====================
-            vectorStore.add(chunks);
-            log.info("✅ 文档向量化完成, 共 {} 个 chunks", chunks.size());
+            // 解析、分析、分片和向量化由 StateGraph 节点编排。
+            documentWorkflowService.process(taskId, message.getUsername(),
+                    message.getFileName(), message.getFileContent());
+            log.info("✅ 文档 StateGraph 处理完成: {}", taskId);
 
             // ==================== 步骤7：更新处理状态 ====================
             // 更新数据库状态为 1（成功）
@@ -150,9 +152,11 @@ public class DocumentMessageReceiver {
 
             // 删除重试计数，释放 Redis 空间
             redisTemplate.delete(retryCountKey);
+            redisTemplate.delete("doc:record:" + taskId);
 
             // 手动确认消息，告诉 RabbitMQ 这条消息已成功处理
             channel.basicAck(amqpMessage.getMessageProperties().getDeliveryTag(), false);
+            redisTemplate.delete(processingKey);
             log.info("✅ 消息确认成功: {}", taskId);
 
         } catch (Exception e) {
@@ -181,9 +185,11 @@ public class DocumentMessageReceiver {
 
                 // 确认原消息，避免重复消费
                 channel.basicAck(amqpMessage.getMessageProperties().getDeliveryTag(), false);
+                redisTemplate.delete(processingKey);
 
                 // 删除重试计数
                 redisTemplate.delete(retryCountKey);
+                redisTemplate.delete("doc:record:" + taskId);
             } else {
                 // ========== 情况B：未达到最大重试次数，进入重试队列 ==========
                 log.warn("⚠️ 消息将进入重试队列: {}, 当前重试次数: {}/{}", taskId, newRetryCount, MAX_CONSUME_RETRY);
@@ -202,19 +208,7 @@ public class DocumentMessageReceiver {
                  * 主队列 → 重试交换机 → 重试队列 → (等待5秒TTL) → 主交换机 → 主队列
                  */
                 channel.basicNack(amqpMessage.getMessageProperties().getDeliveryTag(), false, false);
-            }
-        } finally {
-            // ==================== 步骤9：清理临时文件 ====================
-            /**
-             * 无论成功或失败，都要删除临时文件
-             * 避免磁盘空间泄漏
-             */
-            if (tempFile != null) {
-                try {
-                    Files.deleteIfExists(tempFile.toPath());
-                } catch (IOException ignored) {
-                    // 忽略删除失败的异常，避免影响主流程
-                }
+                redisTemplate.delete(processingKey);
             }
         }
     }

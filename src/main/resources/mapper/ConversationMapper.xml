@@ -19,6 +19,7 @@
         UPDATE conversation_record
         SET messages = #{messages}, username = #{username}, update_time = NOW()
         WHERE conversation_id = #{conversationId}
+        AND username = #{username}
     </update>
 
     <select id="selectByConversationId" parameterType="map" resultMap="ConversationRecordResult">
@@ -35,8 +36,11 @@
         ORDER BY update_time DESC
     </select>
 
-    <delete id="deleteByConversationId" parameterType="String">
+    <delete id="deleteByConversationId" parameterType="map">
         DELETE FROM conversation_record
         WHERE conversation_id = #{conversationId}
+        <if test="username != null">
+            AND username = #{username}
+        </if>
     </delete>
 </mapper>

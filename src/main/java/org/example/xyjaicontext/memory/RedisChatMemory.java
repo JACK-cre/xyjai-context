@@ -49,7 +49,7 @@ public class RedisChatMemory implements ChatMemory {
         if (messages == null || messages.isEmpty()) return;
         String username = UserContext.getUsername();
         if (username == null) username = "anonymous";
-        String baseKey = MEMORY_KEY_PREFIX + conversationId;
+        String baseKey = baseKey(conversationId);
 
         // 1. 获取分布式锁
         String requestId = acquireLock(conversationId);
@@ -70,7 +70,11 @@ public class RedisChatMemory implements ChatMemory {
             // 7. 清除本地缓存
             Cache cache = cacheManager.getCache("chatMemory");
             if (cache != null) {
-                cache.evict(conversationId);
+                cache.evict(conversationId + ":" + username);
+            }
+            Cache conversations = cacheManager.getCache("userConversations");
+            if (conversations != null) {
+                conversations.evict(username);
             }
             // 4. 【关键步骤】物理删除 Redis 缓存
             // 我们需要删除索引 Key，这样下次 get 的时候会认为缓存失效
@@ -106,9 +110,9 @@ public class RedisChatMemory implements ChatMemory {
     }
 
     @Override
-    @Cacheable(value = "chatMemory", key = "#conversationId")
+    @Cacheable(value = "chatMemory", key = "#conversationId + ':' + T(org.example.xyjaicontext.memory.UserContext).getUsername()")
     public List<Message> get(String conversationId) {
-        String baseKey = MEMORY_KEY_PREFIX + conversationId;
+        String baseKey = baseKey(conversationId);
         String indexKey = baseKey + SEGMENT_INDEX_SUFFIX;
 
         try {
@@ -129,6 +133,16 @@ public class RedisChatMemory implements ChatMemory {
             log.error("Error reading memory, falling back to DB: {}", conversationId, e);
             // 异常时回源数据库，但不写回 Redis 防止脏数据
             return getFromDatabase(conversationId);
+        }
+    }
+
+    /** Reads a conversation under an explicit user context so callers cannot cross tenant boundaries. */
+    public List<Message> getForUser(String conversationId, String username) {
+        UserContext.setUsername(username);
+        try {
+            return get(conversationId);
+        } finally {
+            UserContext.clear();
         }
     }
 
@@ -194,9 +208,9 @@ public class RedisChatMemory implements ChatMemory {
         }
     }
     @Override
-    @CacheEvict(value = "chatMemory", key = "#conversationId")
+    @CacheEvict(value = "chatMemory", allEntries = true)
     public void clear(String conversationId) {
-        String baseKey = MEMORY_KEY_PREFIX + conversationId;
+        String baseKey = baseKey(conversationId);
         String requestId = acquireLock(conversationId);
         if (requestId == null) return;
 
@@ -217,7 +231,7 @@ public class RedisChatMemory implements ChatMemory {
             }
 
             // 3. 删除数据库记录
-            conversationMapper.deleteByConversationId(conversationId);
+            conversationMapper.deleteByConversationId(conversationId, currentUsername());
 
         } finally {
             releaseLock(conversationId, requestId);
@@ -246,7 +260,7 @@ public class RedisChatMemory implements ChatMemory {
 
     // 从数据库获取 (保持不变)
     private List<Message> getFromDatabase(String conversationId) {
-        ConversationRecord record = conversationMapper.selectByConversationId(conversationId, UserContext.getUsername());
+        ConversationRecord record = conversationMapper.selectByConversationId(conversationId, currentUsername());
         if (record == null || record.getMessages() == null) {
             return List.of();
         }
@@ -258,6 +272,19 @@ public class RedisChatMemory implements ChatMemory {
         } catch (Exception e) {
             return List.of();
         }
+    }
+
+    /**
+     * Redis segment keys must include the tenant. Database lookups are scoped
+     * too, but a shared cache key would otherwise bypass that protection.
+     */
+    private String baseKey(String conversationId) {
+        return MEMORY_KEY_PREFIX + currentUsername() + ":" + conversationId;
+    }
+
+    private String currentUsername() {
+        String username = UserContext.getUsername();
+        return username == null || username.isBlank() ? "anonymous" : username;
     }
 
     // 更新数据库 (保持不变)
@@ -282,15 +309,24 @@ public class RedisChatMemory implements ChatMemory {
     }
 
     // 删除用户对话
-    @CacheEvict(value = {"chatMemory", "userConversations"}, key = "#conversationId")
+    @CacheEvict(value = {"chatMemory", "userConversations"}, allEntries = true)
     public void deleteUserConversation(String conversationId) {
         clear(conversationId);
+    }
+
+    public void deleteUserConversation(String conversationId, String username) {
+        UserContext.setUsername(username);
+        try {
+            clear(conversationId);
+        } finally {
+            UserContext.clear();
+        }
     }
     // ... (保留原有的 acquireLock, releaseLock, addConversation 等方法)
 
     // 示例：简单的锁获取方法
     private String acquireLock(String conversationId) {
-        String lockKey = LOCK_KEY_PREFIX + conversationId + UserContext.getUsername();
+        String lockKey = LOCK_KEY_PREFIX + conversationId + ":" + currentUsername();
         String requestId = UUID.randomUUID().toString();
         Boolean success = redisTemplate.opsForValue().setIfAbsent(lockKey, requestId, LOCK_EXPIRE_SECONDS, TimeUnit.SECONDS);
         return success != null && success ? requestId : null;
@@ -298,7 +334,7 @@ public class RedisChatMemory implements ChatMemory {
 
     private void releaseLock(String conversationId, String requestId) {
         if (requestId == null) return;
-        String lockKey = LOCK_KEY_PREFIX + conversationId + UserContext.getUsername();
+        String lockKey = LOCK_KEY_PREFIX + conversationId + ":" + currentUsername();
         String script = "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('del', KEYS[1]) else return 0 end";
         redisTemplate.execute(new DefaultRedisScript<>(script, Long.class), Collections.singletonList(lockKey), requestId);
     }
@@ -306,9 +342,11 @@ public class RedisChatMemory implements ChatMemory {
     // 保存对话记录，关联用户
     @CacheEvict(value = "userConversations", key = "#username")
     public void addConversation(String username, String conversationId, String title) {
-        // 从缓存获取最新的消息
-        List<Message> messages = get(conversationId);
+        String previousUsername = UserContext.getUsername();
+        UserContext.setUsername(username);
         try {
+            // 从当前租户缓存获取最新的消息
+            List<Message> messages = get(conversationId);
             String messagesJson = objectMapper.writeValueAsString(messages);
             ConversationRecord record = conversationMapper.selectByConversationId(conversationId, username);
             if (record == null) {
@@ -327,6 +365,12 @@ public class RedisChatMemory implements ChatMemory {
         } catch (Exception e) {
             log.error("Failed to save conversation", e);
             throw new RuntimeException("Failed to save conversation", e);
+        } finally {
+            if (previousUsername == null) {
+                UserContext.clear();
+            } else {
+                UserContext.setUsername(previousUsername);
+            }
         }
     }
 

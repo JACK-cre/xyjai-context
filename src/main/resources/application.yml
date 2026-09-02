@@ -4,7 +4,8 @@ spring:
   ai:
     openai:
       base-url: https://dashscope.aliyuncs.com/compatible-mode
-      api-key: sk-ae8790c4689f4fe1ae0729ec0d7725ba
+      # 仅用于让本地上下文测试完成初始化；生产环境必须通过 DASHSCOPE_API_KEY 覆盖。
+      api-key: ${DASHSCOPE_API_KEY:dev-placeholder}
       chat:
         options:
           model: qwen-turbo
@@ -19,8 +20,8 @@ spring:
         initialize-schema: true
   datasource:
     url: jdbc:mysql://localhost:3306/ai_data_analyst_chat
-    username: root
-    password: 123456
+    username: ${MYSQL_USERNAME:root}
+    password: ${MYSQL_PASSWORD:}
     driver-class-name: com.mysql.cj.jdbc.Driver
     hikari:
       maximum-pool-size: 20
@@ -40,8 +41,8 @@ spring:
   rabbitmq:
     host: localhost
     port: 5672
-    username: guest
-    password: guest
+    username: ${RABBITMQ_USERNAME:guest}
+    password: ${RABBITMQ_PASSWORD:guest}
     virtual-host: /
     listener:
       simple:
@@ -59,13 +60,13 @@ logging:
 
 mybatis:
   mapper-locations: classpath:mapper/*.xml
-  type-aliases-package: org.example.xyjcontext.model
+  type-aliases-package: org.example.xyjaicontext.model
   configuration:
     map-underscore-to-camel-case: true
 
 jwt:
-  secret: spring-ai-secret-key-for-jwt-token-generation-2026
-  expiration: 86400000
+  secret: ${JWT_SECRET:change-me-in-production}
+  expiration: ${JWT_EXPIRATION:86400000}
 
 # ????
 rate-limit:
@@ -73,3 +74,16 @@ rate-limit:
     max-requests: 100      # ????????
     window-seconds: 1    # ????(?)
 
+agent:
+  graph:
+    enabled: ${AGENT_GRAPH_ENABLED:true}
+  context:
+    max-chars: ${AGENT_CONTEXT_MAX_CHARS:12000}
+    recent-message-count: ${AGENT_RECENT_MESSAGE_COUNT:8}
+  rag:
+    top-k: ${AGENT_RAG_TOP_K:6}
+    similarity-threshold: ${AGENT_RAG_SIMILARITY_THRESHOLD:0.72}
+  model:
+    timeout-seconds: ${AGENT_MODEL_TIMEOUT_SECONDS:60}
+  document:
+    result-ttl-hours: ${AGENT_DOCUMENT_RESULT_TTL_HOURS:168}

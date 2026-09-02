@@ -13,5 +13,5 @@ public interface ConversationMapper {
     // 修改后
     ConversationRecord selectByConversationId(@Param("conversationId") String conversationId, @Param("username") String username);
     List<ConversationRecord> selectByUsername(@Param("username") String username);
-    void deleteByConversationId(@Param("conversationId") String conversationId);
+    void deleteByConversationId(@Param("conversationId") String conversationId, @Param("username") String username);
 }

@@ -32,6 +32,7 @@ public class DocumentMessageSender {
 
     private final RabbitTemplate rabbitTemplate;
     private final StringRedisTemplate redisTemplate;
+    private final DocumentWorkflowService documentWorkflowService;
 
     @Value("${rabbitmq.enabled:true}")
     private boolean rabbitmqEnabled;
@@ -128,16 +129,23 @@ public class DocumentMessageSender {
      * @return taskId 任务ID，用于后续查询处理状态
      */
     public String sendDocumentForProcessing(MultipartFile file) throws IOException {
+        return sendDocumentForProcessing(file, "anonymous");
+    }
+
+    public String sendDocumentForProcessing(MultipartFile file, String username) throws IOException {
         // 生成唯一任务ID
         String taskId = UUID.randomUUID().toString();
         String statusKey = "doc:status:" + taskId;
 
         // 在 Redis 中记录初始状态
         redisTemplate.opsForValue().set(statusKey, "PROCESSING", 24, TimeUnit.HOURS);
+        redisTemplate.opsForValue().set("doc:owner:" + taskId,
+                username == null ? "anonymous" : username, 24, TimeUnit.HOURS);
 
         // 封装消息对象
         DocumentMessage message = new DocumentMessage();
         message.setTaskId(taskId);
+        message.setUsername(username);
         message.setFileName(file.getOriginalFilename());
         message.setFileContent(file.getBytes());
 
@@ -152,6 +160,12 @@ public class DocumentMessageSender {
             }
         } else {
             log.warn("MQ已禁用，使用同步处理");
+            try {
+                documentWorkflowService.process(taskId, username, message.getFileName(), message.getFileContent());
+            } catch (Exception e) {
+                redisTemplate.opsForValue().set(statusKey, "FAILED: " + e.getMessage(), 24, TimeUnit.HOURS);
+                throw new RuntimeException("文档同步处理失败", e);
+            }
         }
 
         return taskId;
@@ -222,6 +236,7 @@ public class DocumentMessageSender {
      */
     public static class DocumentMessage implements Serializable {
         private String taskId;
+        private String username;
         private String fileName;
         private byte[] fileContent;
 
@@ -231,6 +246,14 @@ public class DocumentMessageSender {
 
         public void setTaskId(String taskId) {
             this.taskId = taskId;
+        }
+
+        public String getUsername() {
+            return username;
+        }
+
+        public void setUsername(String username) {
+            this.username = username;
         }
 
         public String getFileName() {
