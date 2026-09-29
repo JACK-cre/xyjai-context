@@ -28,6 +28,8 @@ public class AgentGraphConfiguration {
                 .addStrategy(GraphStateKeys.RECENT_MESSAGES, KeyStrategy.REPLACE)
                 .addStrategy(GraphStateKeys.RETRIEVED_CHUNKS, KeyStrategy.REPLACE)
                 .addStrategy(GraphStateKeys.CHUNKS, KeyStrategy.REPLACE)
+                .addStrategy(GraphStateKeys.PARENT_CHUNKS, KeyStrategy.REPLACE)
+                .addStrategy(GraphStateKeys.STRUCTURED_TABLES, KeyStrategy.REPLACE)
                 .build();
     }
 

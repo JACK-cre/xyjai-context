@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="org.example.xyjaicontext.mapper.ConversationSummaryMapper">
+    <resultMap id="ConversationSummaryResult" type="org.example.xyjaicontext.model.ConversationSummary">
+        <id property="id" column="id"/>
+        <result property="conversationId" column="conversation_id"/>
+        <result property="username" column="username"/>
+        <result property="summaryText" column="summary_text"/>
+        <result property="summarizedMessageCount" column="summarized_message_count"/>
+        <result property="version" column="summary_version"/>
+        <result property="createTime" column="create_time"/>
+        <result property="updateTime" column="update_time"/>
+    </resultMap>
+
+    <select id="selectByConversationId" resultMap="ConversationSummaryResult">
+        SELECT id, conversation_id, username, summary_text, summarized_message_count,
+               summary_version, create_time, update_time
+        FROM conversation_summary
+        WHERE conversation_id = #{conversationId}
+          AND username = #{username}
+    </select>
+
+    <insert id="insert" parameterType="org.example.xyjaicontext.model.ConversationSummary"
+            useGeneratedKeys="true" keyProperty="id">
+        INSERT INTO conversation_summary
+            (conversation_id, username, summary_text, summarized_message_count,
+             summary_version, create_time, update_time)
+        VALUES
+            (#{conversationId}, #{username}, #{summaryText}, #{summarizedMessageCount},
+             #{version}, NOW(), NOW())
+    </insert>
+
+    <update id="updateIfVersionMatches" parameterType="org.example.xyjaicontext.model.ConversationSummary">
+        UPDATE conversation_summary
+        SET summary_text = #{summaryText},
+            summarized_message_count = #{summarizedMessageCount},
+            summary_version = summary_version + 1,
+            update_time = NOW()
+        WHERE conversation_id = #{conversationId}
+          AND username = #{username}
+          AND summary_version = #{version}
+    </update>
+
+    <delete id="deleteByConversationId">
+        DELETE FROM conversation_summary
+        WHERE conversation_id = #{conversationId}
+          AND username = #{username}
+    </delete>
+</mapper>

@@ -25,6 +25,7 @@ public class ChatService {
     private final RedisChatMemory chatMemory;
     private final ModelService modelService;
     private final AgentWorkflowService agentWorkflowService;
+    private final ConversationSummaryService conversationSummaryService;
 
     @Value("${agent.graph.enabled:true}")
     private boolean graphEnabled;
@@ -101,6 +102,7 @@ public class ChatService {
                 throw new ModelCallException("模型返回空响应");
             }
             chatMemory.addConversation(username, conversationId, question.substring(0, Math.min(question.length(), 30)));
+            conversationSummaryService.scheduleRefresh(conversationId, username);
             return answer;
         } finally {
             UserContext.clear();
@@ -129,6 +131,7 @@ public class ChatService {
             }
             // 关联用户与对话
             chatMemory.addConversation(username, conversationId, question.substring(0, Math.min(question.length(), 30)));
+            conversationSummaryService.scheduleRefresh(conversationId, username);
             return answer;
         } finally {
             UserContext.clear();

@@ -146,6 +146,16 @@ public class RedisChatMemory implements ChatMemory {
         }
     }
 
+    /** Returns a tenant-scoped tail of the conversation for prompt construction. */
+    public List<Message> getRecentForUser(String conversationId, String username, int maxMessages) {
+        List<Message> messages = getForUser(conversationId, username);
+        if (messages == null || messages.isEmpty() || maxMessages <= 0) {
+            return List.of();
+        }
+        int start = Math.max(0, messages.size() - maxMessages);
+        return List.copyOf(messages.subList(start, messages.size()));
+    }
+
     /**
      * 从数据库加载数据，并按分段策略写入 Redis
      */

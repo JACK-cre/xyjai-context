@@ -79,11 +79,58 @@ agent:
     enabled: ${AGENT_GRAPH_ENABLED:true}
   context:
     max-chars: ${AGENT_CONTEXT_MAX_CHARS:12000}
-    recent-message-count: ${AGENT_RECENT_MESSAGE_COUNT:8}
+    summary:
+      enabled: ${AGENT_CONTEXT_SUMMARY_ENABLED:true}
+      window-turns: ${AGENT_CONTEXT_SUMMARY_WINDOW_TURNS:4}
+      trigger-turns: ${AGENT_CONTEXT_SUMMARY_TRIGGER_TURNS:6}
+      max-summary-chars: ${AGENT_CONTEXT_SUMMARY_MAX_CHARS:3000}
+      redis-ttl-hours: ${AGENT_CONTEXT_SUMMARY_REDIS_TTL_HOURS:168}
+      lock-ttl-seconds: ${AGENT_CONTEXT_SUMMARY_LOCK_TTL_SECONDS:120}
+      executor:
+        core-size: ${AGENT_CONTEXT_SUMMARY_EXECUTOR_CORE_SIZE:1}
+        max-size: ${AGENT_CONTEXT_SUMMARY_EXECUTOR_MAX_SIZE:4}
+        queue-capacity: ${AGENT_CONTEXT_SUMMARY_EXECUTOR_QUEUE_CAPACITY:100}
   rag:
     top-k: ${AGENT_RAG_TOP_K:6}
     similarity-threshold: ${AGENT_RAG_SIMILARITY_THRESHOLD:0.72}
   model:
     timeout-seconds: ${AGENT_MODEL_TIMEOUT_SECONDS:60}
+    executor:
+      chat:
+        core-size: ${AGENT_MODEL_CHAT_CORE_SIZE:8}
+        max-size: ${AGENT_MODEL_CHAT_MAX_SIZE:32}
+        queue-capacity: ${AGENT_MODEL_CHAT_QUEUE_CAPACITY:100}
+      document:
+        core-size: ${AGENT_MODEL_DOCUMENT_CORE_SIZE:4}
+        max-size: ${AGENT_MODEL_DOCUMENT_MAX_SIZE:16}
+        queue-capacity: ${AGENT_MODEL_DOCUMENT_QUEUE_CAPACITY:50}
+    retry:
+      chat:
+        max-attempts: ${AGENT_MODEL_CHAT_RETRY_MAX_ATTEMPTS:2}
+        initial-backoff: ${AGENT_MODEL_CHAT_RETRY_INITIAL_BACKOFF:300ms}
+        max-backoff: ${AGENT_MODEL_CHAT_RETRY_MAX_BACKOFF:3s}
+        total-timeout: ${AGENT_MODEL_CHAT_RETRY_TOTAL_TIMEOUT:70s}
+      document:
+        max-attempts: ${AGENT_MODEL_DOCUMENT_RETRY_MAX_ATTEMPTS:2}
+        initial-backoff: ${AGENT_MODEL_DOCUMENT_RETRY_INITIAL_BACKOFF:500ms}
+        max-backoff: ${AGENT_MODEL_DOCUMENT_RETRY_MAX_BACKOFF:5s}
+        total-timeout: ${AGENT_MODEL_DOCUMENT_RETRY_TOTAL_TIMEOUT:180s}
   document:
     result-ttl-hours: ${AGENT_DOCUMENT_RESULT_TTL_HOURS:168}
+    processing:
+      max-file-size-bytes: ${AGENT_DOCUMENT_MAX_FILE_SIZE_BYTES:52428800}
+      allowed-extensions: pdf,doc,docx,xls,xlsx,ppt,pptx,txt,md,html,htm,rtf,csv,tsv,json,xml
+      scanned-pdf-min-chars-per-page: ${AGENT_DOCUMENT_SCANNED_PDF_MIN_CHARS_PER_PAGE:20}
+      ocr:
+        enabled: ${AGENT_DOCUMENT_OCR_ENABLED:false}
+        command: ${AGENT_DOCUMENT_OCR_COMMAND:tesseract}
+        languages: ${AGENT_DOCUMENT_OCR_LANGUAGES:chi_sim+eng}
+        dpi: ${AGENT_DOCUMENT_OCR_DPI:200}
+        page-timeout: ${AGENT_DOCUMENT_OCR_PAGE_TIMEOUT:60s}
+      chunking:
+        min-child-tokens: ${AGENT_DOCUMENT_MIN_CHILD_TOKENS:120}
+        target-child-tokens: ${AGENT_DOCUMENT_TARGET_CHILD_TOKENS:400}
+        max-child-tokens: ${AGENT_DOCUMENT_MAX_CHILD_TOKENS:700}
+        parent-max-tokens: ${AGENT_DOCUMENT_PARENT_MAX_TOKENS:1600}
+        overlap-tokens: ${AGENT_DOCUMENT_OVERLAP_TOKENS:60}
+        table-rows-per-chunk: ${AGENT_DOCUMENT_TABLE_ROWS_PER_CHUNK:30}

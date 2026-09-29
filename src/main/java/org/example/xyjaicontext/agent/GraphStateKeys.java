@@ -26,6 +26,13 @@ public final class GraphStateKeys {
     public static final String CHECKSUM = "checksum";//校验和
     public static final String PARSED_TEXT = "parsedText";//已解析文本
     public static final String CHUNKS = "chunks";//块
+    public static final String PARENT_CHUNKS = "parentChunks";
+    public static final String STRUCTURED_TABLES = "structuredTables";
+    public static final String PARENT_COUNT = "parentCount";
+    public static final String MIME_TYPE = "mimeType";
+    public static final String PARSER_NAME = "parserName";
+    public static final String PAGE_COUNT = "pageCount";
+    public static final String TABLE_COUNT = "tableCount";
     public static final String DOCUMENT_SUMMARY = "documentSummary";//文档摘要
     public static final String FACTS = "facts";
     public static final String QUESTIONS = "questions";

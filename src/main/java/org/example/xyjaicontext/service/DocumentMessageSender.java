@@ -3,6 +3,8 @@ package org.example.xyjaicontext.service;
 import jakarta.annotation.PostConstruct;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.example.xyjaicontext.document.DetectedDocumentType;
+import org.example.xyjaicontext.document.DocumentFileValidator;
 import org.springframework.amqp.core.Message;
 import org.springframework.amqp.rabbit.connection.CorrelationData;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
@@ -33,6 +35,7 @@ public class DocumentMessageSender {
     private final RabbitTemplate rabbitTemplate;
     private final StringRedisTemplate redisTemplate;
     private final DocumentWorkflowService documentWorkflowService;
+    private final DocumentFileValidator documentFileValidator;
 
     @Value("${rabbitmq.enabled:true}")
     private boolean rabbitmqEnabled;
@@ -133,6 +136,8 @@ public class DocumentMessageSender {
     }
 
     public String sendDocumentForProcessing(MultipartFile file, String username) throws IOException {
+        byte[] content = file.getBytes();
+        DetectedDocumentType detected = documentFileValidator.validate(file.getOriginalFilename(), content);
         // 生成唯一任务ID
         String taskId = UUID.randomUUID().toString();
         String statusKey = "doc:status:" + taskId;
@@ -146,8 +151,8 @@ public class DocumentMessageSender {
         DocumentMessage message = new DocumentMessage();
         message.setTaskId(taskId);
         message.setUsername(username);
-        message.setFileName(file.getOriginalFilename());
-        message.setFileContent(file.getBytes());
+        message.setFileName(detected.fileName());
+        message.setFileContent(content);
 
         if (rabbitmqEnabled) {
             try {

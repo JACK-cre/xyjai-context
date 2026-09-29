@@ -7,6 +7,10 @@ import org.example.xyjaicontext.model.ConversationRecord;
 import org.example.xyjaicontext.service.ChatService;
 import org.example.xyjaicontext.service.DocumentService;
 import org.example.xyjaicontext.service.AgentWorkflowService;
+import org.example.xyjaicontext.service.ConversationSummaryService;
+import org.example.xyjaicontext.service.ModelCallException;
+import org.example.xyjaicontext.service.ModelOverloadedException;
+import org.example.xyjaicontext.service.ModelTimeoutException;
 import org.example.xyjaicontext.util.RedissonRateLimiter;
 import org.springframework.ai.chat.messages.Message;
 import org.springframework.beans.factory.annotation.Value;
@@ -28,6 +32,7 @@ public class AiController {
 
     private final ChatService chatService;
     private final AgentWorkflowService agentWorkflowService;
+    private final ConversationSummaryService conversationSummaryService;
     private final DocumentService documentService;
     private final RedissonRateLimiter rateLimiter;
     private final RedisChatMemory chatMemory;
@@ -66,6 +71,7 @@ public class AiController {
                                                                                 Authentication authentication) {
         try {
             chatMemory.deleteUserConversation(conversationId, authentication.getName());
+            conversationSummaryService.delete(conversationId, authentication.getName());
             return ResponseEntity.ok(ApiResponse.success(Map.of("msg", "对话删除成功")));
         } catch (Exception e) {
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
@@ -97,6 +103,15 @@ public class AiController {
                 response.put("runId", result.runId());
             }
             return ResponseEntity.ok(ApiResponse.success(response));
+        } catch (ModelOverloadedException e) {
+            return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
+                    .body(ApiResponse.success(Map.of("code", "MODEL_OVERLOADED", "error", e.getMessage())));
+        } catch (ModelTimeoutException e) {
+            return ResponseEntity.status(HttpStatus.GATEWAY_TIMEOUT)
+                    .body(ApiResponse.success(Map.of("code", "MODEL_TIMEOUT", "error", e.getMessage())));
+        } catch (ModelCallException e) {
+            return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
+                    .body(ApiResponse.success(Map.of("code", "MODEL_UNAVAILABLE", "error", e.getMessage())));
         } catch (Exception e) {
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
                     .body(ApiResponse.success(Map.of("error", "AI服务异常: " + e.getMessage())));
